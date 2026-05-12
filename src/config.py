@@ -36,6 +36,9 @@ class QualityGateConfig:
     min_maintainability_rating: str = "B"
     ratings_blocking: bool = True
 
+    # Dependency cycles
+    cycles_blocking: bool = False
+
     # SARIF (bandit, pip-audit)
     sarif_blocking: bool = False
 
@@ -83,6 +86,9 @@ def load_config(path: str) -> QualityGateConfig:
         config.min_security_rating = rt.get("min_security", "A").upper()
         config.min_maintainability_rating = rt.get("min_maintainability", "B").upper()
         config.ratings_blocking = bool(rt.get("blocking", True))
+
+    if "dependency_cycles" in raw:
+        config.cycles_blocking = bool(raw["dependency_cycles"].get("blocking", False))
 
     if "sarif" in raw:
         config.sarif_blocking = bool(raw["sarif"].get("blocking", False))
