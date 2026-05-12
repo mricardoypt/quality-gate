@@ -40,30 +40,6 @@ def _ratings_section(report: AggregatedReport) -> list[str]:
     return lines
 
 
-def _debt_section(report: AggregatedReport) -> list[str]:
-    if not report.debt:
-        return []
-    d = report.debt
-    bd = d.breakdown
-    lines = [
-        "",
-        "## Technical Debt",
-        "",
-        f"**Total:** {d.formatted_total()} (ratio {d.formatted_ratio()} of estimated development cost)",
-        "",
-        "| Category | Debt |",
-        "| --- | --- |",
-        f"| Bugs | {bd.bugs_minutes}min |",
-        f"| Vulnerabilities | {bd.vulnerabilities_minutes}min |",
-        f"| Code Smells | {bd.code_smells_minutes}min |",
-        f"| Complexity Violations | {bd.complexity_minutes}min |",
-        f"| Duplication | {bd.duplication_minutes}min |",
-        f"| Oversized Files | {bd.size_minutes}min |",
-        f"| **Total** | **{d.formatted_total()}** |",
-    ]
-    return lines
-
-
 def _coverage_section(report: AggregatedReport) -> list[str]:
     if not report.coverage:
         return []
@@ -257,14 +233,12 @@ def write(report: AggregatedReport) -> None:
         lines.append(f"| {check.name}{label} | {icon} | {check.value} | {check.threshold} |")
 
     lines += _ratings_section(report)
-    lines += _debt_section(report)
     lines += _coverage_section(report)
     lines += _complexity_section(report)
     lines += _static_section(report)
     lines += _duplication_section(report)
     lines += _size_section(report)
     lines += _differential_section(report)
-    lines += _claude_instructions(report)
 
     if report.mutation:
         lines += [
@@ -275,6 +249,8 @@ def write(report: AggregatedReport) -> None:
             f"- Killed: {report.mutation.killed} / {report.mutation.total}",
             f"- Survived: {report.mutation.survived}",
         ]
+
+    lines += _claude_instructions(report)
 
     try:
         with open(summary_path, "w") as f:

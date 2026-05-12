@@ -113,11 +113,14 @@ def post(report: AggregatedReport, sha: str) -> None:
         "X-GitHub-Api-Version": "2022-11-28",
     }
 
+    logger.info("Posting %d annotation(s) for sha=%s", len(annotations), sha)
     response = requests.post(
         f"{_GITHUB_API}/repos/{repository}/check-runs",
         json=payload,
         headers=headers,
         timeout=15,
     )
-    if not response.ok:
+    if response.ok:
+        logger.info("Check run created: %s", response.json().get("html_url", ""))
+    else:
         logger.error("Failed to post check annotations: %s %s", response.status_code, response.text)
