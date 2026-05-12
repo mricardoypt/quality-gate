@@ -12,9 +12,21 @@ from src.analyzers.sarif import SarifResult
 from src.analyzers.static_analysis import StaticAnalysisResult
 from src.config import QualityGateConfig
 from src.debt import TechnicalDebt, calculate as calculate_debt
+from src.diff import to_relative
 from src.ratings import Ratings, compute as compute_ratings
 
 _RATING_ORDER = {"A": 0, "B": 1, "C": 2, "D": 3, "E": 4}
+
+
+@dataclass
+class DiffSummary:
+    new_bugs: int
+    new_vulnerabilities: int
+    new_code_smells: int
+    new_complexity_violations: int
+    new_security_findings: int
+    new_large_files: int
+    new_duplication_blocks: int
 
 
 @dataclass
@@ -40,6 +52,7 @@ class AggregatedReport:
     debt: Optional[TechnicalDebt]
     ratings: Optional[Ratings]
     new_code_lines: Optional[dict[str, set[int]]] = field(default=None)
+    diff_summary: Optional[DiffSummary] = field(default=None)
 
     @property
     def gate_passed(self) -> bool:
@@ -56,6 +69,84 @@ class AggregatedReport:
     @property
     def is_pr_context(self) -> bool:
         return self.new_code_lines is not None
+
+
+def _line_in_diff(new_code_lines: dict[str, set[int]], abs_path: str, line: int) -> bool:
+    return line in new_code_lines.get(to_relative(abs_path), set())
+
+
+def _file_in_diff(new_code_lines: dict[str, set[int]], path: str) -> bool:
+    return to_relative(path) in new_code_lines
+
+
+def _count_static_in_diff(
+    static: Optional[StaticAnalysisResult], new_code_lines: dict[str, set[int]]
+) -> tuple[int, int, int]:
+    bugs = vulns = smells = 0
+    if not static:
+        return bugs, vulns, smells
+    for f in static.findings:
+        if not _line_in_diff(new_code_lines, f.file, f.line):
+            continue
+        if f.category == "bug":
+            bugs += 1
+        elif f.category == "vulnerability":
+            vulns += 1
+        else:
+            smells += 1
+    return bugs, vulns, smells
+
+
+def _count_complexity_in_diff(
+    complexity: Optional[ComplexityResult], new_code_lines: dict[str, set[int]]
+) -> int:
+    if not complexity:
+        return 0
+    seen: set[tuple] = set()
+    count = 0
+    for fn in complexity.cyclomatic_violations + complexity.cognitive_violations:
+        key = (fn.file, fn.name, fn.lineno)
+        if key not in seen and _line_in_diff(new_code_lines, fn.file, fn.lineno):
+            seen.add(key)
+            count += 1
+    return count
+
+
+def _count_security_in_diff(
+    sarif: Optional[SarifResult], new_code_lines: dict[str, set[int]]
+) -> int:
+    if not sarif:
+        return 0
+    return sum(
+        1 for f in sarif.findings
+        if (f.line and _line_in_diff(new_code_lines, f.file, f.line))
+        or (not f.line and _file_in_diff(new_code_lines, f.file))
+    )
+
+
+def _compute_diff_summary(
+    new_code_lines: dict[str, set[int]],
+    static: Optional[StaticAnalysisResult],
+    complexity: Optional[ComplexityResult],
+    sarif: Optional[SarifResult],
+    raw_metrics: Optional[RawMetricsResult],
+    duplication: Optional[DuplicationResult],
+) -> DiffSummary:
+    new_bugs, new_vulns, new_smells = _count_static_in_diff(static, new_code_lines)
+    return DiffSummary(
+        new_bugs=new_bugs,
+        new_vulnerabilities=new_vulns,
+        new_code_smells=new_smells,
+        new_complexity_violations=_count_complexity_in_diff(complexity, new_code_lines),
+        new_security_findings=_count_security_in_diff(sarif, new_code_lines),
+        new_large_files=sum(
+            1 for f in raw_metrics.large_files if _file_in_diff(new_code_lines, f.path)
+        ) if raw_metrics else 0,
+        new_duplication_blocks=sum(
+            1 for b in duplication.blocks
+            if _file_in_diff(new_code_lines, b.file_a) or _file_in_diff(new_code_lines, b.file_b)
+        ) if duplication else 0,
+    )
 
 
 def _rating_passes(actual: str, minimum: str) -> bool:
@@ -217,6 +308,12 @@ def aggregate(
             threshold=f">= {config.mutation_threshold:.0f}%",
         ))
 
+    diff_summary = (
+        _compute_diff_summary(new_code_lines, static, complexity, sarif, raw_metrics, duplication)
+        if new_code_lines is not None
+        else None
+    )
+
     return AggregatedReport(
         checks=checks,
         coverage=coverage,
@@ -230,4 +327,5 @@ def aggregate(
         debt=debt,
         ratings=ratings,
         new_code_lines=new_code_lines,
+        diff_summary=diff_summary,
     )

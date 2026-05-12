@@ -22,19 +22,28 @@ def _ratings_row(report: AggregatedReport) -> str:
     return f"| Ratings | — | Reliability {rel} · Security {sec} · Maintainability {mnt} | — |\n"
 
 
-def _new_code_summary(report: AggregatedReport) -> str:
-    if not report.is_pr_context or not report.static:
+def _diff_section(report: AggregatedReport) -> str:
+    if not report.is_pr_context or not report.diff_summary:
         return ""
-    new = report.static.new_code_findings
-    if not new:
-        return "\n> **New code** introduced in this PR: no issues found.\n"
-    bugs = sum(1 for f in new if f.category == "bug")
-    vulns = sum(1 for f in new if f.category == "vulnerability")
-    smells = sum(1 for f in new if f.category == "code_smell")
-    return (
-        f"\n> **New code** introduced in this PR: "
-        f"{bugs} bug(s) · {vulns} vulnerability(ies) · {smells} code smell(s)\n"
-    )
+    d = report.diff_summary
+    parts = []
+    if d.new_bugs:
+        parts.append(f"{d.new_bugs} bug(s)")
+    if d.new_vulnerabilities:
+        parts.append(f"{d.new_vulnerabilities} vulnerability(ies)")
+    if d.new_code_smells:
+        parts.append(f"{d.new_code_smells} code smell(s)")
+    if d.new_complexity_violations:
+        parts.append(f"{d.new_complexity_violations} complexity violation(s)")
+    if d.new_security_findings:
+        parts.append(f"{d.new_security_findings} security finding(s)")
+    if d.new_large_files:
+        parts.append(f"{d.new_large_files} large file(s)")
+    if d.new_duplication_blocks:
+        parts.append(f"{d.new_duplication_blocks} duplication block(s)")
+    if not parts:
+        return "\n> **New code in this PR:** no issues found.\n"
+    return f"\n> **New code in this PR:** {', '.join(parts)}\n"
 
 
 def build(report: AggregatedReport, run_url: str) -> str:
@@ -51,11 +60,6 @@ def build(report: AggregatedReport, run_url: str) -> str:
         rows.append(_ratings_row(report).strip())
 
     table = "\n".join(rows)
-    debt_line = ""
-    if report.debt:
-        debt_line = f"\n**Technical debt:** {report.debt.formatted_total()} (ratio {report.debt.formatted_ratio()})\n"
-
-    new_code_section = _new_code_summary(report)
     footer = f"\n> Full report and fix instructions → [Job Summary]({run_url})." if run_url else ""
 
-    return header + table + debt_line + new_code_section + footer
+    return header + table + _diff_section(report) + footer

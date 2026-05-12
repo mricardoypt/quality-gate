@@ -5,17 +5,12 @@ import os
 import requests
 
 from src.aggregator import AggregatedReport
+from src.diff import to_relative
 
 logger = logging.getLogger(__name__)
 
 _GITHUB_API = "https://api.github.com"
 _MAX_ANNOTATIONS = 50  # GitHub API hard limit per request
-_REPO_PATH = os.environ.get("REPO_PATH", "/repo")
-
-
-def _relative_path(absolute: str) -> str:
-    prefix = _REPO_PATH.rstrip("/") + "/"
-    return absolute[len(prefix):] if absolute.startswith(prefix) else absolute
 
 
 def _in_pr_diff(path: str, line: int, new_code_lines: dict[str, set[int]]) -> bool:
@@ -30,7 +25,7 @@ def _build_annotations(report: AggregatedReport) -> list[dict]:
         for finding in report.static.bugs + report.static.vulnerabilities:
             if not finding.file or not finding.line:
                 continue
-            path = _relative_path(finding.file)
+            path = to_relative(finding.file)
             if diff is not None and not _in_pr_diff(path, finding.line, diff):
                 continue
             annotations.append({
@@ -45,7 +40,7 @@ def _build_annotations(report: AggregatedReport) -> list[dict]:
         for finding in report.static.code_smells:
             if not finding.file or not finding.line:
                 continue
-            path = _relative_path(finding.file)
+            path = to_relative(finding.file)
             if diff is not None and not _in_pr_diff(path, finding.line, diff):
                 continue
             annotations.append({
@@ -59,7 +54,7 @@ def _build_annotations(report: AggregatedReport) -> list[dict]:
 
     if report.complexity:
         for fn in report.complexity.cyclomatic_violations:
-            path = _relative_path(fn.file)
+            path = to_relative(fn.file)
             if diff is not None and not _in_pr_diff(path, fn.lineno, diff):
                 continue
             annotations.append({
@@ -71,7 +66,7 @@ def _build_annotations(report: AggregatedReport) -> list[dict]:
                 "message": f"`{fn.name}` has cyclomatic complexity {fn.cyclomatic} (max {report.complexity.cyclomatic_max}). Refactor into smaller functions.",
             })
         for fn in report.complexity.cognitive_violations:
-            path = _relative_path(fn.file)
+            path = to_relative(fn.file)
             if diff is not None and not _in_pr_diff(path, fn.lineno, diff):
                 continue
             annotations.append({
@@ -88,7 +83,7 @@ def _build_annotations(report: AggregatedReport) -> list[dict]:
         for finding in report.sarif.findings:
             if not finding.file or not finding.line:
                 continue
-            path = _relative_path(finding.file)
+            path = to_relative(finding.file)
             if diff is not None and not _in_pr_diff(path, finding.line, diff):
                 continue
             annotations.append({

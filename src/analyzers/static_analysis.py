@@ -5,6 +5,8 @@ import subprocess
 from dataclasses import dataclass, field
 from typing import Optional
 
+from src.diff import to_relative
+
 logger = logging.getLogger(__name__)
 
 # Rule prefix → category. Order matters: longer prefixes first to avoid mismatch.
@@ -110,11 +112,8 @@ def analyze(
         category, severity = _categorize(rule)
         file_path = item.get("filename", "")
         line = item.get("location", {}).get("row", 0)
-        is_new = (
-            new_code_lines is not None
-            and file_path in new_code_lines
-            and line in new_code_lines[file_path]
-        )
+        rel_path = to_relative(file_path)
+        is_new = new_code_lines is not None and line in new_code_lines.get(rel_path, set())
         findings.append(
             StaticFinding(
                 file=file_path,

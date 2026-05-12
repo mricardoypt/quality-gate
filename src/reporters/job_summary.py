@@ -1,7 +1,10 @@
 """Writes the full GitHub Job Summary (GITHUB_STEP_SUMMARY) including Claude fix instructions."""
+import logging
 import os
 
 from src.aggregator import AggregatedReport
+
+logger = logging.getLogger(__name__)
 
 _RATING_EMOJI = {"A": "🟢", "B": "🟡", "C": "🟠", "D": "🔴", "E": "🔴"}
 
@@ -166,6 +169,27 @@ def _differential_section(report: AggregatedReport) -> list[str]:
     return lines
 
 
+def _pr_impact_section(report: AggregatedReport) -> list[str]:
+    if not report.is_pr_context or not report.diff_summary:
+        return []
+    d = report.diff_summary
+    static = report.static
+    return [
+        "",
+        "## PR Impact (New Code Only)",
+        "",
+        "| Metric | New in this PR | Total in repo |",
+        "| --- | --- | --- |",
+        f"| Bugs | {d.new_bugs} | {len(static.bugs) if static else '—'} |",
+        f"| Vulnerabilities | {d.new_vulnerabilities} | {len(static.vulnerabilities) if static else '—'} |",
+        f"| Code Smells | {d.new_code_smells} | {len(static.code_smells) if static else '—'} |",
+        f"| Complexity Violations | {d.new_complexity_violations} | {(len(report.complexity.cyclomatic_violations) + len(report.complexity.cognitive_violations)) if report.complexity else '—'} |",
+        f"| Security Findings | {d.new_security_findings} | {len(report.sarif.findings) if report.sarif else '—'} |",
+        f"| Large Files | {d.new_large_files} | {len(report.raw_metrics.large_files) if report.raw_metrics else '—'} |",
+        f"| Duplication Blocks | {d.new_duplication_blocks} | {len(report.duplication.blocks) if report.duplication else '—'} |",
+    ]
+
+
 def _claude_instructions(report: AggregatedReport) -> list[str]:
     if report.gate_passed and not report.warning_failures:
         return []
@@ -232,6 +256,7 @@ def write(report: AggregatedReport) -> None:
         label = "" if check.blocking else " _(non-blocking)_"
         lines.append(f"| {check.name}{label} | {icon} | {check.value} | {check.threshold} |")
 
+    lines += _pr_impact_section(report)
     lines += _ratings_section(report)
     lines += _coverage_section(report)
     lines += _complexity_section(report)
