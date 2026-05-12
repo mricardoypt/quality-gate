@@ -10,6 +10,12 @@ logger = logging.getLogger(__name__)
 
 _GITHUB_API = "https://api.github.com"
 _MAX_ANNOTATIONS = 50  # GitHub API hard limit per request
+_REPO_PATH = os.environ.get("REPO_PATH", "/repo")
+
+
+def _relative_path(absolute: str) -> str:
+    prefix = _REPO_PATH.rstrip("/") + "/"
+    return absolute[len(prefix):] if absolute.startswith(prefix) else absolute
 
 
 def _build_annotations(report: AggregatedReport) -> list[dict]:
@@ -20,7 +26,7 @@ def _build_annotations(report: AggregatedReport) -> list[dict]:
             if not finding.file or not finding.line:
                 continue
             annotations.append({
-                "path": finding.file,
+                "path": _relative_path(finding.file),
                 "start_line": finding.line,
                 "end_line": finding.line,
                 "annotation_level": "failure",
@@ -32,7 +38,7 @@ def _build_annotations(report: AggregatedReport) -> list[dict]:
             if not finding.file or not finding.line:
                 continue
             annotations.append({
-                "path": finding.file,
+                "path": _relative_path(finding.file),
                 "start_line": finding.line,
                 "end_line": finding.line,
                 "annotation_level": "warning",
@@ -43,7 +49,7 @@ def _build_annotations(report: AggregatedReport) -> list[dict]:
     if report.complexity:
         for fn in report.complexity.cyclomatic_violations:
             annotations.append({
-                "path": fn.file,
+                "path": _relative_path(fn.file),
                 "start_line": fn.lineno,
                 "end_line": fn.lineno,
                 "annotation_level": "warning",
@@ -52,7 +58,7 @@ def _build_annotations(report: AggregatedReport) -> list[dict]:
             })
         for fn in report.complexity.cognitive_violations:
             annotations.append({
-                "path": fn.file,
+                "path": _relative_path(fn.file),
                 "start_line": fn.lineno,
                 "end_line": fn.lineno,
                 "annotation_level": "warning",
@@ -66,7 +72,7 @@ def _build_annotations(report: AggregatedReport) -> list[dict]:
             if not finding.file or not finding.line:
                 continue
             annotations.append({
-                "path": finding.file,
+                "path": _relative_path(finding.file),
                 "start_line": finding.line,
                 "end_line": finding.line,
                 "annotation_level": level_map.get(finding.severity, "warning"),
