@@ -1,4 +1,4 @@
-"""Parses SARIF files produced by bandit, pip-audit, or any SARIF-emitting tool."""
+"""Parses native JSON reports from bandit and pip-audit."""
 import json
 import logging
 from dataclasses import dataclass
@@ -6,7 +6,7 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-SEVERITY_RANK = {"error": 3, "warning": 2, "note": 1, "none": 0}
+_BANDIT_SEVERITY_MAP = {"HIGH": "error", "MEDIUM": "warning", "LOW": "note"}
 
 
 @dataclass
@@ -33,50 +33,68 @@ class SarifResult:
 
     def summary(self) -> str:
         if not self.findings:
-            return "No SARIF findings."
+            return "No security findings."
         return f"{self.error_count} error(s), {self.warning_count} warning(s) across {len(self.findings)} finding(s)."
 
 
-def _parse_single(path: str) -> list[SarifFinding]:
+def _parse_bandit(path: str) -> list[SarifFinding]:
     try:
         with open(path) as f:
             data = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
-        logger.warning("Could not parse SARIF file: %s", path)
+        logger.warning("Could not parse bandit JSON: %s", path)
         return []
 
-    findings: list[SarifFinding] = []
-
-    for run in data.get("runs", []):
-        tool_name = run.get("tool", {}).get("driver", {}).get("name", "unknown")
-        for result in run.get("results", []):
-            level = result.get("level", "warning")
-            message = result.get("message", {}).get("text", "")
-            rule_id = result.get("ruleId", "")
-            locations = result.get("locations", [{}])
-            loc = locations[0].get("physicalLocation", {}) if locations else {}
-            file_path = loc.get("artifactLocation", {}).get("uri", "")
-            line = loc.get("region", {}).get("startLine", 0)
-            findings.append(
-                SarifFinding(
-                    tool=tool_name,
-                    rule_id=rule_id,
-                    message=message,
-                    severity=level,
-                    file=file_path,
-                    line=line,
-                )
+    findings = []
+    for result in data.get("results", []):
+        severity = _BANDIT_SEVERITY_MAP.get(result.get("issue_severity", "").upper(), "note")
+        findings.append(
+            SarifFinding(
+                tool="bandit",
+                rule_id=result.get("test_id", ""),
+                message=result.get("issue_text", ""),
+                severity=severity,
+                file=result.get("filename", ""),
+                line=result.get("line_number", 0),
             )
-
+        )
     return findings
 
 
-def parse(sarif_paths: list[str]) -> Optional[SarifResult]:
-    all_findings: list[SarifFinding] = []
-    for path in sarif_paths:
-        all_findings.extend(_parse_single(path))
+def _parse_pip_audit(path: str) -> list[SarifFinding]:
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        logger.warning("Could not parse pip-audit JSON: %s", path)
+        return []
 
-    if not sarif_paths:
+    findings = []
+    for package in data.get("dependencies", []):
+        name = package.get("name", "")
+        version = package.get("version", "")
+        for vuln in package.get("vulns", []):
+            findings.append(
+                SarifFinding(
+                    tool="pip-audit",
+                    rule_id=vuln.get("id", ""),
+                    message=f"{name}=={version}: {vuln.get('description', '')}",
+                    severity="error",
+                    file="requirements.txt",
+                    line=0,
+                )
+            )
+    return findings
+
+
+def parse(bandit_path: Optional[str], pip_audit_path: Optional[str]) -> Optional[SarifResult]:
+    if bandit_path is None and pip_audit_path is None:
         return None
 
-    return SarifResult(findings=all_findings)
+    findings: list[SarifFinding] = []
+    if bandit_path is not None:
+        findings.extend(_parse_bandit(bandit_path))
+    if pip_audit_path is not None:
+        findings.extend(_parse_pip_audit(pip_audit_path))
+
+    return SarifResult(findings=findings)
