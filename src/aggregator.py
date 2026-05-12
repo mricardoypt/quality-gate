@@ -2,14 +2,14 @@
 from dataclasses import dataclass, field
 from typing import Optional
 
-from src.analyzers.complexity import ComplexityResult
+from src.analyzers.complexity import ComplexFunction, ComplexityResult
 from src.analyzers.coverage import CoverageResult
 from src.analyzers.cycles import CyclesResult
-from src.analyzers.duplication import DuplicationResult
+from src.analyzers.duplication import DuplicateBlock, DuplicationResult
 from src.analyzers.mutation import MutationResult
-from src.analyzers.raw_metrics import RawMetricsResult
-from src.analyzers.sarif import SarifResult
-from src.analyzers.static_analysis import StaticAnalysisResult
+from src.analyzers.raw_metrics import FileMetrics, RawMetricsResult
+from src.analyzers.sarif import SarifFinding, SarifResult
+from src.analyzers.static_analysis import StaticFinding, StaticAnalysisResult
 from src.config import QualityGateConfig
 from src.debt import TechnicalDebt, calculate as calculate_debt
 from src.diff import to_relative
@@ -20,13 +20,45 @@ _RATING_ORDER = {"A": 0, "B": 1, "C": 2, "D": 3, "E": 4}
 
 @dataclass
 class DiffSummary:
-    new_bugs: int
-    new_vulnerabilities: int
-    new_code_smells: int
-    new_complexity_violations: int
-    new_security_findings: int
-    new_large_files: int
-    new_duplication_blocks: int
+    bugs: list[StaticFinding]
+    vulnerabilities: list[StaticFinding]
+    code_smells: list[StaticFinding]
+    complexity_violations: list[ComplexFunction]
+    security_findings: list[SarifFinding]
+    large_files: list[FileMetrics]
+    duplication_blocks: list[DuplicateBlock]
+    diff_line_rate: Optional[float]
+    diff_branch_rate: Optional[float]
+    diff_covered_lines: int
+    diff_total_lines: int
+
+    @property
+    def new_bugs(self) -> int:
+        return len(self.bugs)
+
+    @property
+    def new_vulnerabilities(self) -> int:
+        return len(self.vulnerabilities)
+
+    @property
+    def new_code_smells(self) -> int:
+        return len(self.code_smells)
+
+    @property
+    def new_complexity_violations(self) -> int:
+        return len(self.complexity_violations)
+
+    @property
+    def new_security_findings(self) -> int:
+        return len(self.security_findings)
+
+    @property
+    def new_large_files(self) -> int:
+        return len(self.large_files)
+
+    @property
+    def new_duplication_blocks(self) -> int:
+        return len(self.duplication_blocks)
 
 
 @dataclass
@@ -79,73 +111,113 @@ def _file_in_diff(new_code_lines: dict[str, set[int]], path: str) -> bool:
     return to_relative(path) in new_code_lines
 
 
-def _count_static_in_diff(
+def _filter_static_in_diff(
     static: Optional[StaticAnalysisResult], new_code_lines: dict[str, set[int]]
-) -> tuple[int, int, int]:
-    bugs = vulns = smells = 0
+) -> tuple[list[StaticFinding], list[StaticFinding], list[StaticFinding]]:
+    bugs: list[StaticFinding] = []
+    vulns: list[StaticFinding] = []
+    smells: list[StaticFinding] = []
     if not static:
         return bugs, vulns, smells
     for f in static.findings:
         if not _line_in_diff(new_code_lines, f.file, f.line):
             continue
         if f.category == "bug":
-            bugs += 1
+            bugs.append(f)
         elif f.category == "vulnerability":
-            vulns += 1
+            vulns.append(f)
         else:
-            smells += 1
+            smells.append(f)
     return bugs, vulns, smells
 
 
-def _count_complexity_in_diff(
+def _filter_complexity_in_diff(
     complexity: Optional[ComplexityResult], new_code_lines: dict[str, set[int]]
-) -> int:
+) -> list[ComplexFunction]:
     if not complexity:
-        return 0
+        return []
     seen: set[tuple] = set()
-    count = 0
+    result: list[ComplexFunction] = []
     for fn in complexity.cyclomatic_violations + complexity.cognitive_violations:
         key = (fn.file, fn.name, fn.lineno)
         if key not in seen and _line_in_diff(new_code_lines, fn.file, fn.lineno):
             seen.add(key)
-            count += 1
-    return count
+            result.append(fn)
+    return result
 
 
-def _count_security_in_diff(
+def _filter_security_in_diff(
     sarif: Optional[SarifResult], new_code_lines: dict[str, set[int]]
-) -> int:
+) -> list[SarifFinding]:
     if not sarif:
-        return 0
-    return sum(
-        1 for f in sarif.findings
+        return []
+    return [
+        f for f in sarif.findings
         if (f.line and _line_in_diff(new_code_lines, f.file, f.line))
         or (not f.line and _file_in_diff(new_code_lines, f.file))
-    )
+    ]
+
+
+def _filter_large_files_in_diff(
+    raw_metrics: Optional[RawMetricsResult], new_code_lines: dict[str, set[int]]
+) -> list[FileMetrics]:
+    if not raw_metrics:
+        return []
+    return [f for f in raw_metrics.large_files if _file_in_diff(new_code_lines, f.path)]
+
+
+def _filter_duplication_in_diff(
+    duplication: Optional[DuplicationResult], new_code_lines: dict[str, set[int]]
+) -> list[DuplicateBlock]:
+    # DuplicateBlock paths are already relative
+    if not duplication:
+        return []
+    return [
+        b for b in duplication.blocks
+        if b.file_a in new_code_lines or b.file_b in new_code_lines
+    ]
+
+
+def _aggregate_diff_coverage(
+    coverage: Optional[CoverageResult], new_code_lines: dict[str, set[int]]
+) -> tuple[Optional[float], Optional[float], int, int]:
+    if not coverage or not coverage.per_file:
+        return None, None, 0, 0
+    matched = [f for f in coverage.per_file if f.path in new_code_lines]
+    if not matched:
+        return None, None, 0, 0
+    total = sum(f.total_lines for f in matched)
+    covered = sum(f.covered_lines for f in matched)
+    if total == 0:
+        return None, None, 0, 0
+    # Weighted average of branch rates
+    branch_covered = sum(f.branch_rate * f.total_lines for f in matched)
+    return (covered / total) * 100, branch_covered / total, covered, total
 
 
 def _compute_diff_summary(
     new_code_lines: dict[str, set[int]],
+    coverage: Optional[CoverageResult],
     static: Optional[StaticAnalysisResult],
     complexity: Optional[ComplexityResult],
     sarif: Optional[SarifResult],
     raw_metrics: Optional[RawMetricsResult],
     duplication: Optional[DuplicationResult],
 ) -> DiffSummary:
-    new_bugs, new_vulns, new_smells = _count_static_in_diff(static, new_code_lines)
+    bugs, vulns, smells = _filter_static_in_diff(static, new_code_lines)
+    line_rate, branch_rate, covered, total = _aggregate_diff_coverage(coverage, new_code_lines)
     return DiffSummary(
-        new_bugs=new_bugs,
-        new_vulnerabilities=new_vulns,
-        new_code_smells=new_smells,
-        new_complexity_violations=_count_complexity_in_diff(complexity, new_code_lines),
-        new_security_findings=_count_security_in_diff(sarif, new_code_lines),
-        new_large_files=sum(
-            1 for f in raw_metrics.large_files if _file_in_diff(new_code_lines, f.path)
-        ) if raw_metrics else 0,
-        new_duplication_blocks=sum(
-            1 for b in duplication.blocks
-            if _file_in_diff(new_code_lines, b.file_a) or _file_in_diff(new_code_lines, b.file_b)
-        ) if duplication else 0,
+        bugs=bugs,
+        vulnerabilities=vulns,
+        code_smells=smells,
+        complexity_violations=_filter_complexity_in_diff(complexity, new_code_lines),
+        security_findings=_filter_security_in_diff(sarif, new_code_lines),
+        large_files=_filter_large_files_in_diff(raw_metrics, new_code_lines),
+        duplication_blocks=_filter_duplication_in_diff(duplication, new_code_lines),
+        diff_line_rate=line_rate,
+        diff_branch_rate=branch_rate,
+        diff_covered_lines=covered,
+        diff_total_lines=total,
     )
 
 
@@ -309,7 +381,7 @@ def aggregate(
         ))
 
     diff_summary = (
-        _compute_diff_summary(new_code_lines, static, complexity, sarif, raw_metrics, duplication)
+        _compute_diff_summary(new_code_lines, coverage, static, complexity, sarif, raw_metrics, duplication)
         if new_code_lines is not None
         else None
     )
