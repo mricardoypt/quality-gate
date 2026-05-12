@@ -15,15 +15,49 @@ _MAX_ANNOTATIONS = 50  # GitHub API hard limit per request
 def _build_annotations(report: AggregatedReport) -> list[dict]:
     annotations: list[dict] = []
 
-    if report.complexity:
-        for v in report.complexity.violations:
+    if report.static:
+        for finding in report.static.bugs + report.static.vulnerabilities:
+            if not finding.file or not finding.line:
+                continue
             annotations.append({
-                "path": v.file,
-                "start_line": v.lineno,
-                "end_line": v.lineno,
+                "path": finding.file,
+                "start_line": finding.line,
+                "end_line": finding.line,
+                "annotation_level": "failure",
+                "title": f"[{finding.category.replace('_', ' ').title()}] {finding.rule}",
+                "message": finding.message,
+            })
+
+        for finding in report.static.code_smells:
+            if not finding.file or not finding.line:
+                continue
+            annotations.append({
+                "path": finding.file,
+                "start_line": finding.line,
+                "end_line": finding.line,
                 "annotation_level": "warning",
-                "title": f"High cognitive complexity ({v.complexity})",
-                "message": f"Function `{v.name}` has complexity {v.complexity}. Refactor into smaller, focused functions.",
+                "title": f"[Code Smell] {finding.rule}",
+                "message": finding.message,
+            })
+
+    if report.complexity:
+        for fn in report.complexity.cyclomatic_violations:
+            annotations.append({
+                "path": fn.file,
+                "start_line": fn.lineno,
+                "end_line": fn.lineno,
+                "annotation_level": "warning",
+                "title": f"High cyclomatic complexity ({fn.cyclomatic})",
+                "message": f"`{fn.name}` has cyclomatic complexity {fn.cyclomatic} (max {report.complexity.cyclomatic_max}). Refactor into smaller functions.",
+            })
+        for fn in report.complexity.cognitive_violations:
+            annotations.append({
+                "path": fn.file,
+                "start_line": fn.lineno,
+                "end_line": fn.lineno,
+                "annotation_level": "warning",
+                "title": f"High cognitive complexity ({fn.cognitive})",
+                "message": f"`{fn.name}` has cognitive complexity {fn.cognitive} (max {report.complexity.cognitive_max}). Reduce nesting and conditional chains.",
             })
 
     if report.sarif:
@@ -46,17 +80,14 @@ def _build_annotations(report: AggregatedReport) -> list[dict]:
 def post(report: AggregatedReport, sha: str) -> None:
     token = os.environ.get("GITHUB_TOKEN")
     repository = os.environ.get("GITHUB_REPOSITORY")
-
     if not token or not repository:
         logger.warning("GITHUB_TOKEN or GITHUB_REPOSITORY not set; skipping annotations")
         return
 
     annotations = _build_annotations(report)
-    if not annotations:
-        return
-
     conclusion = "success" if report.gate_passed else "failure"
-    title = "Quality Gate passed" if report.gate_passed else "Quality Gate failed"
+    blocking_count = len(report.blocking_failures)
+    warning_count = len(report.warning_failures)
 
     payload = {
         "name": "Quality Gate",
@@ -64,8 +95,8 @@ def post(report: AggregatedReport, sha: str) -> None:
         "status": "completed",
         "conclusion": conclusion,
         "output": {
-            "title": title,
-            "summary": f"{len(report.blocking_failures)} blocking failure(s), {len(report.warning_failures)} warning(s).",
+            "title": "Quality Gate passed" if report.gate_passed else "Quality Gate failed",
+            "summary": f"{blocking_count} blocking failure(s), {warning_count} non-blocking warning(s).",
             "annotations": annotations,
         },
     }
@@ -82,6 +113,5 @@ def post(report: AggregatedReport, sha: str) -> None:
         headers=headers,
         timeout=15,
     )
-
     if not response.ok:
         logger.error("Failed to post check annotations: %s %s", response.status_code, response.text)

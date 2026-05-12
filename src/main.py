@@ -1,11 +1,12 @@
-"""Quality Gate entrypoint — reads config, runs analysis, posts outputs, exits 0 or 1."""
+"""Quality Gate entrypoint — reads config, runs all analyzers, posts outputs, exits 0 or 1."""
 import logging
 import os
 import subprocess
 import sys
 
 from src import aggregator
-from src.analyzers import coverage, complexity, cycles, mutation, sarif
+from src.analyzers import complexity, coverage, cycles, mutation, sarif
+from src.analyzers import duplication, raw_metrics, static_analysis
 from src.config import load_config
 from src import github_client
 from src.reporters import annotations, job_summary, pr_comment
@@ -27,13 +28,6 @@ def _install_consumer_requirements() -> None:
     )
 
 
-def _run_mutation(config, src_path: str, tests_path: str):
-    if config.mutation_threshold is None:
-        return None
-    logger.info("Running mutation testing (this may take several minutes)…")
-    return mutation.analyze(REPO_PATH, src_path, tests_path)
-
-
 def main() -> int:
     config_path = os.path.join(REPO_PATH, ".qualitygate.yml")
     config = load_config(config_path)
@@ -51,11 +45,24 @@ def main() -> int:
 
     _install_consumer_requirements()
 
+    logger.info("Fetching PR diff for differential analysis…")
+    new_code_lines = github_client.get_changed_lines_by_file()
+
     logger.info("Analyzing coverage…")
     coverage_result = coverage.parse(coverage_xml)
 
-    logger.info("Analyzing cognitive complexity…")
-    complexity_result = complexity.analyze(src_path, config.complexity_max)
+    logger.info("Running static analysis (bugs, vulnerabilities, code smells)…")
+    static_result = static_analysis.analyze(src_path, new_code_lines)
+
+    logger.info("Analyzing cyclomatic and cognitive complexity…")
+    complexity_result = complexity.analyze(src_path, config.cyclomatic_max, config.cognitive_max)
+
+    logger.info("Detecting code duplication…")
+    total_lines = coverage_result.total_lines if coverage_result else 0
+    duplication_result = duplication.analyze(src_path, total_lines)
+
+    logger.info("Measuring file and function sizes…")
+    raw_metrics_result = raw_metrics.analyze(src_path, config.max_function_lines, config.max_file_sloc)
 
     logger.info("Checking dependency cycles…")
     cycles_result = cycles.analyze(REPO_PATH)
@@ -63,15 +70,22 @@ def main() -> int:
     logger.info("Parsing SARIF reports…")
     sarif_result = sarif.parse(sarif_paths)
 
-    mutation_result = _run_mutation(config, src_path, tests_path)
+    mutation_result = None
+    if config.mutation_threshold is not None:
+        logger.info("Running mutation testing (may take several minutes)…")
+        mutation_result = mutation.analyze(REPO_PATH, src_path, tests_path)
 
     report = aggregator.aggregate(
         config=config,
         coverage=coverage_result,
+        static=static_result,
         complexity=complexity_result,
         cycles=cycles_result,
+        duplication=duplication_result,
+        raw_metrics=raw_metrics_result,
         sarif=sarif_result,
         mutation=mutation_result,
+        new_code_lines=new_code_lines,
     )
 
     sha = os.environ.get("GITHUB_SHA", "")

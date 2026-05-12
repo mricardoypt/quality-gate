@@ -1,9 +1,11 @@
-"""GitHub API helpers — PR comments and diff-scoped file listing."""
+"""GitHub API helpers — PR comments, diff-scoped file listing, changed-line mapping."""
 import logging
 import os
 from typing import Optional
 
 import requests
+
+from src.diff import parse_added_lines
 
 logger = logging.getLogger(__name__)
 
@@ -19,10 +21,27 @@ def _headers() -> dict:
     }
 
 
+def _pr_files() -> Optional[list[dict]]:
+    repository = os.environ.get("GITHUB_REPOSITORY")
+    pr_number = os.environ.get("PR_NUMBER")
+    if not repository or not pr_number:
+        return None
+
+    response = requests.get(
+        f"{_GITHUB_API}/repos/{repository}/pulls/{pr_number}/files",
+        headers=_headers(),
+        timeout=15,
+    )
+    if not response.ok:
+        logger.error("Failed to fetch PR files: %s %s", response.status_code, response.text)
+        return None
+
+    return response.json()
+
+
 def post_pr_comment(body: str) -> None:
     repository = os.environ.get("GITHUB_REPOSITORY")
     pr_number = os.environ.get("PR_NUMBER")
-
     if not repository or not pr_number:
         logger.warning("GITHUB_REPOSITORY or PR_NUMBER not set; skipping PR comment")
         return
@@ -33,31 +52,21 @@ def post_pr_comment(body: str) -> None:
         headers=_headers(),
         timeout=15,
     )
-
     if not response.ok:
         logger.error("Failed to post PR comment: %s %s", response.status_code, response.text)
 
 
-def get_changed_python_files() -> Optional[list[str]]:
-    """Returns the list of .py files changed in the PR, or None if not in a PR context."""
-    repository = os.environ.get("GITHUB_REPOSITORY")
-    pr_number = os.environ.get("PR_NUMBER")
-
-    if not repository or not pr_number:
+def get_changed_lines_by_file() -> Optional[dict[str, set[int]]]:
+    """
+    Returns {filepath: {added_line_numbers}} for every .py file in the PR.
+    Returns None when not running in a PR context.
+    """
+    files = _pr_files()
+    if files is None:
         return None
 
-    response = requests.get(
-        f"{_GITHUB_API}/repos/{repository}/pulls/{pr_number}/files",
-        headers=_headers(),
-        timeout=15,
-    )
-
-    if not response.ok:
-        logger.error("Failed to fetch PR files: %s %s", response.status_code, response.text)
-        return None
-
-    return [
-        f["filename"]
-        for f in response.json()
+    return {
+        f["filename"]: parse_added_lines(f.get("patch", ""))
+        for f in files
         if f["filename"].endswith(".py") and f["status"] != "removed"
-    ]
+    }
