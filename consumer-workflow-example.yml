@@ -1,5 +1,5 @@
-# Add this job to your repo's CI workflow AFTER your test and SARIF steps.
-# Requires: coverage.xml, bandit.sarif, pip-audit.sarif at repo root.
+# Add this job to your repo's CI workflow AFTER your test and security steps.
+# Requires: coverage.xml, bandit.json, pip-audit.json at repo root.
 
   quality-gate:
     name: Quality Gate
@@ -16,7 +16,7 @@
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
-          name: quality-reports   # artifact containing coverage.xml, bandit.sarif, pip-audit.sarif
+          name: quality-reports   # artifact containing coverage.xml, bandit.json, pip-audit.json
 
       - name: Run Quality Gate
         run: |

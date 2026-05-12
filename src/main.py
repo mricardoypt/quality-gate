@@ -35,13 +35,10 @@ def main() -> int:
     src_path = os.path.join(REPO_PATH, "src")
     tests_path = os.path.join(REPO_PATH, "tests")
     coverage_xml = os.path.join(REPO_PATH, "coverage.xml")
-    sarif_paths = [
-        p for p in [
-            os.path.join(REPO_PATH, "bandit.sarif"),
-            os.path.join(REPO_PATH, "pip-audit.sarif"),
-        ]
-        if os.path.exists(p)
-    ]
+    bandit_json = os.path.join(REPO_PATH, "bandit.json")
+    pip_audit_json = os.path.join(REPO_PATH, "pip-audit.json")
+    bandit_path = bandit_json if os.path.exists(bandit_json) else None
+    pip_audit_path = pip_audit_json if os.path.exists(pip_audit_json) else None
 
     _install_consumer_requirements()
 
@@ -67,8 +64,8 @@ def main() -> int:
     logger.info("Checking dependency cycles…")
     cycles_result = cycles.analyze(REPO_PATH)
 
-    logger.info("Parsing SARIF reports…")
-    sarif_result = sarif.parse(sarif_paths)
+    logger.info("Parsing security reports…")
+    sarif_result = sarif.parse(bandit_path, pip_audit_path)
 
     mutation_result = None
     if config.mutation_threshold is not None:
