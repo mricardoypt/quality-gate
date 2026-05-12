@@ -276,5 +276,12 @@ def write(report: AggregatedReport) -> None:
             f"- Survived: {report.mutation.survived}",
         ]
 
-    with open(summary_path, "w") as f:
-        f.write("\n".join(lines))
+    try:
+        with open(summary_path, "w") as f:
+            f.write("\n".join(lines))
+    except OSError:
+        logger.warning(
+            "Could not write job summary to %s — mount the runner temp dir in Docker "
+            "(-v $(dirname \"$GITHUB_STEP_SUMMARY\"):$(dirname \"$GITHUB_STEP_SUMMARY\"))",
+            summary_path,
+        )
