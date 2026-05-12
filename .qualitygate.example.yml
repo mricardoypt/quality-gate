@@ -1,0 +1,20 @@
+# Copy this file to .qualitygate.yml in your repo and adjust thresholds.
+
+coverage:
+  threshold: 80   # minimum line coverage percentage
+  blocking: true
+
+complexity:
+  max_cognitive: 15   # maximum cognitive complexity per function (radon)
+  blocking: true
+
+dependency_cycles:
+  blocking: false   # set to true to block PRs with import cycles
+
+sarif:
+  blocking: false   # set to true to block on bandit/pip-audit errors
+
+# Uncomment to enable mutation testing (slow — adds several minutes to CI)
+# mutation_score:
+#   threshold: 70
+#   blocking: false
