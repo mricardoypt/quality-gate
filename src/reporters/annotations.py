@@ -18,15 +18,23 @@ def _relative_path(absolute: str) -> str:
     return absolute[len(prefix):] if absolute.startswith(prefix) else absolute
 
 
+def _in_pr_diff(path: str, line: int, new_code_lines: dict[str, set[int]]) -> bool:
+    return line in new_code_lines.get(path, set())
+
+
 def _build_annotations(report: AggregatedReport) -> list[dict]:
+    diff = report.new_code_lines  # None when not a PR
     annotations: list[dict] = []
 
     if report.static:
         for finding in report.static.bugs + report.static.vulnerabilities:
             if not finding.file or not finding.line:
                 continue
+            path = _relative_path(finding.file)
+            if diff is not None and not _in_pr_diff(path, finding.line, diff):
+                continue
             annotations.append({
-                "path": _relative_path(finding.file),
+                "path": path,
                 "start_line": finding.line,
                 "end_line": finding.line,
                 "annotation_level": "failure",
@@ -37,8 +45,11 @@ def _build_annotations(report: AggregatedReport) -> list[dict]:
         for finding in report.static.code_smells:
             if not finding.file or not finding.line:
                 continue
+            path = _relative_path(finding.file)
+            if diff is not None and not _in_pr_diff(path, finding.line, diff):
+                continue
             annotations.append({
-                "path": _relative_path(finding.file),
+                "path": path,
                 "start_line": finding.line,
                 "end_line": finding.line,
                 "annotation_level": "warning",
@@ -48,8 +59,11 @@ def _build_annotations(report: AggregatedReport) -> list[dict]:
 
     if report.complexity:
         for fn in report.complexity.cyclomatic_violations:
+            path = _relative_path(fn.file)
+            if diff is not None and not _in_pr_diff(path, fn.lineno, diff):
+                continue
             annotations.append({
-                "path": _relative_path(fn.file),
+                "path": path,
                 "start_line": fn.lineno,
                 "end_line": fn.lineno,
                 "annotation_level": "warning",
@@ -57,8 +71,11 @@ def _build_annotations(report: AggregatedReport) -> list[dict]:
                 "message": f"`{fn.name}` has cyclomatic complexity {fn.cyclomatic} (max {report.complexity.cyclomatic_max}). Refactor into smaller functions.",
             })
         for fn in report.complexity.cognitive_violations:
+            path = _relative_path(fn.file)
+            if diff is not None and not _in_pr_diff(path, fn.lineno, diff):
+                continue
             annotations.append({
-                "path": _relative_path(fn.file),
+                "path": path,
                 "start_line": fn.lineno,
                 "end_line": fn.lineno,
                 "annotation_level": "warning",
@@ -71,8 +88,11 @@ def _build_annotations(report: AggregatedReport) -> list[dict]:
         for finding in report.sarif.findings:
             if not finding.file or not finding.line:
                 continue
+            path = _relative_path(finding.file)
+            if diff is not None and not _in_pr_diff(path, finding.line, diff):
+                continue
             annotations.append({
-                "path": _relative_path(finding.file),
+                "path": path,
                 "start_line": finding.line,
                 "end_line": finding.line,
                 "annotation_level": level_map.get(finding.severity, "warning"),

@@ -108,6 +108,25 @@ def aggregate(
             threshold="—",
         ))
 
+    if static is not None and new_code_lines is not None:
+        new_findings = static.new_code_findings
+        new_bugs = [f for f in new_findings if f.category == "bug"]
+        new_vulns = [f for f in new_findings if f.category == "vulnerability"]
+        checks.append(GateCheck(
+            name="New Code: Bugs",
+            passed=len(new_bugs) == 0,
+            blocking=True,
+            value=str(len(new_bugs)),
+            threshold="0",
+        ))
+        checks.append(GateCheck(
+            name="New Code: Vulnerabilities",
+            passed=len(new_vulns) == 0,
+            blocking=True,
+            value=str(len(new_vulns)),
+            threshold="0",
+        ))
+
     if complexity is not None:
         cyc_ok = len(complexity.cyclomatic_violations) == 0
         cog_ok = len(complexity.cognitive_violations) == 0
