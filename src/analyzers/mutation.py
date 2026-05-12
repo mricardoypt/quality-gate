@@ -1,13 +1,11 @@
 """Runs mutmut and parses the mutation score. Opt-in only (slow)."""
 import logging
-import re
 import subprocess
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from typing import Optional
 
 logger = logging.getLogger(__name__)
-
-_SCORE_RE = re.compile(r"Survived:\s*(\d+).*?Killed:\s*(\d+)", re.DOTALL)
 
 
 @dataclass
@@ -26,7 +24,7 @@ def analyze(repo_path: str, src_path: str, tests_path: str) -> Optional[Mutation
         subprocess.run(
             ["mutmut", "run", "--paths-to-mutate", src_path, "--tests-dir", tests_path],
             cwd=repo_path,
-            timeout=600,  # mutation testing is slow; 10 min hard cap
+            timeout=600,
             check=False,
         )
     except FileNotFoundError:
@@ -38,25 +36,31 @@ def analyze(repo_path: str, src_path: str, tests_path: str) -> Optional[Mutation
 
     try:
         result = subprocess.run(
-            ["mutmut", "results"],
+            ["mutmut", "junitxml"],
             capture_output=True,
             text=True,
             cwd=repo_path,
             timeout=30,
         )
     except subprocess.TimeoutExpired:
-        logger.error("mutmut results timed out")
+        logger.error("mutmut junitxml timed out")
         return None
 
-    output = result.stdout + result.stderr
-    match = _SCORE_RE.search(output)
-    if not match:
-        logger.error("Could not parse mutmut results: %s", output)
+    try:
+        root = ET.fromstring(result.stdout)
+    except ET.ParseError:
+        logger.exception("Could not parse mutmut junitxml output")
         return None
 
-    survived = int(match.group(1))
-    killed = int(match.group(2))
-    total = survived + killed
+    suite = root.find("testsuite") if root.tag == "testsuites" else root
+    if suite is None:
+        logger.error("No testsuite element found in mutmut junitxml output")
+        return None
+
+    total = int(suite.get("tests", 0))
+    # In mutmut JUnit XML: a "failure" means the mutant survived (test didn't catch it)
+    survived = int(suite.get("failures", 0)) + int(suite.get("errors", 0))
+    killed = total - survived
 
     if total == 0:
         return None
