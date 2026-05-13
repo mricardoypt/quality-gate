@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from src.analyzers.complexity import ComplexFunction, ComplexityResult
-from src.analyzers.coverage import CoverageResult
+from src.analyzers.coverage import CoverageResult, FileCoverage
 from src.analyzers.cycles import CyclesResult
 from src.analyzers.duplication import DuplicateBlock, DuplicationResult
 from src.analyzers.mutation import MutationResult
@@ -31,6 +31,8 @@ class DiffSummary:
     diff_branch_rate: Optional[float]
     diff_covered_lines: int
     diff_total_lines: int
+    diff_file_coverage: list[FileCoverage] = field(default_factory=list)
+    coverage_threshold: Optional[float] = None
 
     @property
     def new_bugs(self) -> int:
@@ -180,19 +182,18 @@ def _filter_duplication_in_diff(
 
 def _aggregate_diff_coverage(
     coverage: Optional[CoverageResult], new_code_lines: dict[str, set[int]]
-) -> tuple[Optional[float], Optional[float], int, int]:
+) -> tuple[Optional[float], Optional[float], int, int, list[FileCoverage]]:
     if not coverage or not coverage.per_file:
-        return None, None, 0, 0
+        return None, None, 0, 0, []
     matched = [f for f in coverage.per_file if f.path in new_code_lines]
     if not matched:
-        return None, None, 0, 0
+        return None, None, 0, 0, []
     total = sum(f.total_lines for f in matched)
     covered = sum(f.covered_lines for f in matched)
     if total == 0:
-        return None, None, 0, 0
-    # Weighted average of branch rates
+        return None, None, 0, 0, matched
     branch_covered = sum(f.branch_rate * f.total_lines for f in matched)
-    return (covered / total) * 100, branch_covered / total, covered, total
+    return (covered / total) * 100, branch_covered / total, covered, total, matched
 
 
 def _compute_diff_summary(
@@ -203,9 +204,10 @@ def _compute_diff_summary(
     sarif: Optional[SarifResult],
     raw_metrics: Optional[RawMetricsResult],
     duplication: Optional[DuplicationResult],
+    coverage_threshold: Optional[float] = None,
 ) -> DiffSummary:
     bugs, vulns, smells = _filter_static_in_diff(static, new_code_lines)
-    line_rate, branch_rate, covered, total = _aggregate_diff_coverage(coverage, new_code_lines)
+    line_rate, branch_rate, covered, total, file_coverage = _aggregate_diff_coverage(coverage, new_code_lines)
     return DiffSummary(
         bugs=bugs,
         vulnerabilities=vulns,
@@ -218,6 +220,8 @@ def _compute_diff_summary(
         diff_branch_rate=branch_rate,
         diff_covered_lines=covered,
         diff_total_lines=total,
+        diff_file_coverage=file_coverage,
+        coverage_threshold=coverage_threshold,
     )
 
 
@@ -225,7 +229,88 @@ def _rating_passes(actual: str, minimum: str) -> bool:
     return _RATING_ORDER.get(actual, 4) <= _RATING_ORDER.get(minimum, 4)
 
 
-def aggregate(
+def _pr_checks(
+    diff_summary: DiffSummary,
+    config: QualityGateConfig,
+    complexity: Optional[ComplexityResult],
+    sarif: Optional[SarifResult],
+    raw_metrics: Optional[RawMetricsResult],
+    duplication: Optional[DuplicationResult],
+) -> list[GateCheck]:
+    checks: list[GateCheck] = []
+
+    if diff_summary.diff_file_coverage:
+        all_pass = all(
+            f.line_rate >= config.coverage.threshold
+            for f in diff_summary.diff_file_coverage
+        )
+        checks.append(GateCheck(
+            name="Coverage (diff)",
+            passed=all_pass,
+            blocking=config.coverage.blocking,
+            value=(
+                f"{diff_summary.diff_line_rate:.1f}% lines"
+                f" ({diff_summary.diff_covered_lines}/{diff_summary.diff_total_lines},"
+                f" {len(diff_summary.diff_file_coverage)} file(s))"
+            ),
+            threshold=f">= {config.coverage.threshold:.0f}% per file",
+        ))
+
+    checks.append(GateCheck(
+        name="New Code: Bugs",
+        passed=len(diff_summary.bugs) == 0,
+        blocking=True,
+        value=str(len(diff_summary.bugs)),
+        threshold="0",
+    ))
+    checks.append(GateCheck(
+        name="New Code: Vulnerabilities",
+        passed=len(diff_summary.vulnerabilities) == 0,
+        blocking=True,
+        value=str(len(diff_summary.vulnerabilities)),
+        threshold="0",
+    ))
+
+    if complexity is not None:
+        checks.append(GateCheck(
+            name="Complexity (diff)",
+            passed=len(diff_summary.complexity_violations) == 0,
+            blocking=config.complexity_blocking,
+            value=f"{len(diff_summary.complexity_violations)} violation(s)",
+            threshold="0",
+        ))
+
+    if sarif is not None:
+        checks.append(GateCheck(
+            name="Security (diff)",
+            passed=len(diff_summary.security_findings) == 0,
+            blocking=config.sarif_blocking,
+            value=f"{len(diff_summary.security_findings)} finding(s)",
+            threshold="0 errors",
+        ))
+
+    if raw_metrics is not None:
+        checks.append(GateCheck(
+            name="File Size (diff)",
+            passed=len(diff_summary.large_files) == 0,
+            blocking=config.size_blocking,
+            value=f"{len(diff_summary.large_files)} large file(s) > {config.max_file_sloc} SLOC",
+            threshold=f"<= {config.max_file_sloc} SLOC",
+        ))
+
+    if duplication is not None:
+        checks.append(GateCheck(
+            name="Duplication (diff)",
+            passed=len(diff_summary.duplication_blocks) == 0,
+            blocking=config.duplication_blocking,
+            value=f"{len(diff_summary.duplication_blocks)} block(s)",
+            threshold="0 blocks",
+        ))
+
+    return checks
+
+
+def _full_repo_checks(
     config: QualityGateConfig,
     coverage: Optional[CoverageResult],
     static: Optional[StaticAnalysisResult],
@@ -235,8 +320,9 @@ def aggregate(
     raw_metrics: Optional[RawMetricsResult],
     sarif: Optional[SarifResult],
     mutation: Optional[MutationResult],
-    new_code_lines: Optional[dict[str, set[int]]] = None,
-) -> AggregatedReport:
+    ratings: Optional[Ratings],
+    debt: Optional[TechnicalDebt],
+) -> list[GateCheck]:
     checks: list[GateCheck] = []
 
     if coverage is not None:
@@ -265,44 +351,23 @@ def aggregate(
         ))
         checks.append(GateCheck(
             name="Code Smells",
-            passed=True,  # informational by default — gate via ratings instead
+            passed=True,
             blocking=False,
             value=str(len(static.code_smells)),
             threshold="—",
         ))
 
-    if static is not None and new_code_lines is not None:
-        new_findings = static.new_code_findings
-        new_bugs = [f for f in new_findings if f.category == "bug"]
-        new_vulns = [f for f in new_findings if f.category == "vulnerability"]
-        checks.append(GateCheck(
-            name="New Code: Bugs",
-            passed=len(new_bugs) == 0,
-            blocking=True,
-            value=str(len(new_bugs)),
-            threshold="0",
-        ))
-        checks.append(GateCheck(
-            name="New Code: Vulnerabilities",
-            passed=len(new_vulns) == 0,
-            blocking=True,
-            value=str(len(new_vulns)),
-            threshold="0",
-        ))
-
     if complexity is not None:
-        cyc_ok = len(complexity.cyclomatic_violations) == 0
-        cog_ok = len(complexity.cognitive_violations) == 0
         checks.append(GateCheck(
             name="Cyclomatic Complexity",
-            passed=cyc_ok,
+            passed=len(complexity.cyclomatic_violations) == 0,
             blocking=config.complexity_blocking,
             value=f"{len(complexity.cyclomatic_violations)} violation(s), max={complexity.max_cyclomatic_found}",
             threshold=f"max <= {config.cyclomatic_max}",
         ))
         checks.append(GateCheck(
             name="Cognitive Complexity",
-            passed=cog_ok,
+            passed=len(complexity.cognitive_violations) == 0,
             blocking=config.complexity_blocking,
             value=f"{len(complexity.cognitive_violations)} violation(s), max={complexity.max_cognitive_found}",
             threshold=f"max <= {config.cognitive_max}",
@@ -344,11 +409,7 @@ def aggregate(
             threshold="0 errors",
         ))
 
-    debt = calculate_debt(static, complexity, duplication, raw_metrics)
-
-    ratings: Optional[Ratings] = None
-    if static is not None:
-        ratings = compute_ratings(static, debt)
+    if ratings is not None and debt is not None:
         checks.append(GateCheck(
             name="Reliability Rating",
             passed=_rating_passes(ratings.reliability, config.min_reliability_rating),
@@ -380,11 +441,36 @@ def aggregate(
             threshold=f">= {config.mutation_threshold:.0f}%",
         ))
 
-    diff_summary = (
-        _compute_diff_summary(new_code_lines, coverage, static, complexity, sarif, raw_metrics, duplication)
-        if new_code_lines is not None
-        else None
-    )
+    return checks
+
+
+def aggregate(
+    config: QualityGateConfig,
+    coverage: Optional[CoverageResult],
+    static: Optional[StaticAnalysisResult],
+    complexity: Optional[ComplexityResult],
+    cycles: Optional[CyclesResult],
+    duplication: Optional[DuplicationResult],
+    raw_metrics: Optional[RawMetricsResult],
+    sarif: Optional[SarifResult],
+    mutation: Optional[MutationResult],
+    new_code_lines: Optional[dict[str, set[int]]] = None,
+) -> AggregatedReport:
+    debt = calculate_debt(static, complexity, duplication, raw_metrics)
+    ratings: Optional[Ratings] = compute_ratings(static, debt) if static is not None else None
+
+    if new_code_lines is not None:
+        diff_summary = _compute_diff_summary(
+            new_code_lines, coverage, static, complexity, sarif, raw_metrics, duplication,
+            coverage_threshold=config.coverage.threshold,
+        )
+        checks = _pr_checks(diff_summary, config, complexity, sarif, raw_metrics, duplication)
+    else:
+        diff_summary = None
+        checks = _full_repo_checks(
+            config, coverage, static, complexity, cycles, duplication,
+            raw_metrics, sarif, mutation, ratings, debt,
+        )
 
     return AggregatedReport(
         checks=checks,

@@ -31,19 +31,30 @@ def _icon(passed: bool, blocking: bool) -> str:
 # ---------------------------------------------------------------------------
 
 def _diff_coverage_section(report: AggregatedReport) -> list[str]:
-    if not report.diff_summary:
+    if not report.diff_summary or not report.diff_summary.diff_file_coverage:
         return []
     d = report.diff_summary
-    if d.diff_line_rate is None:
-        return []
-    branch_str = f" / **{d.diff_branch_rate:.1f}%** branches" if d.diff_branch_rate is not None else ""
-    return [
+    threshold = d.coverage_threshold
+
+    lines = [
         "",
         "## Coverage (diff files)",
         "",
-        f"- Line coverage: **{d.diff_line_rate:.1f}%**{branch_str}",
-        f"- Lines covered: {d.diff_covered_lines} / {d.diff_total_lines}",
+        "| File | Line % | Branch % | Covered/Total | Status |",
+        "| --- | --- | --- | --- | --- |",
     ]
+    for f in d.diff_file_coverage:
+        passed = threshold is None or f.line_rate >= threshold
+        status = "✅" if passed else "❌"
+        lines.append(f"| `{f.path}` | {f.line_rate:.1f}% | {f.branch_rate:.1f}% | {f.covered_lines}/{f.total_lines} | {status} |")
+
+    if d.diff_line_rate is not None:
+        branch_str = f" / {d.diff_branch_rate:.1f}% branches" if d.diff_branch_rate is not None else ""
+        lines += [
+            "",
+            f"**Aggregate:** {d.diff_line_rate:.1f}% lines{branch_str} ({d.diff_covered_lines}/{d.diff_total_lines})",
+        ]
+    return lines
 
 
 def _finding_rows(findings: list, limit: int = 20) -> list[str]:
