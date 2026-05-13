@@ -9,7 +9,7 @@ from src.analyzers import complexity, coverage, cycles, mutation, sarif
 from src.analyzers import duplication, raw_metrics, static_analysis
 from src.config import load_config
 from src import github_client
-from src.reporters import annotations, job_summary, pr_comment
+from src.reporters import job_summary, pr_comment
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s — %(message)s")
 logger = logging.getLogger(__name__)
@@ -85,13 +85,11 @@ def main() -> int:
         new_code_lines=new_code_lines,
     )
 
-    sha = os.environ.get("GITHUB_SHA", "")
     run_id = os.environ.get("GITHUB_RUN_ID", "")
     repository = os.environ.get("GITHUB_REPOSITORY", "")
     run_url = f"https://github.com/{repository}/actions/runs/{run_id}" if repository else ""
 
     job_summary.write(report)
-    annotations.post(report, sha)
 
     comment_body = pr_comment.build(report, run_url)
     github_client.post_pr_comment(comment_body)
