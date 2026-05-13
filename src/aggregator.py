@@ -1,6 +1,9 @@
 """Combines all analysis results, applies threshold checks, and produces the final report."""
+import logging
 from dataclasses import dataclass, field
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 from src.analyzers.complexity import ComplexFunction, ComplexityResult
 from src.analyzers.coverage import CoverageResult, FileCoverage
@@ -33,6 +36,7 @@ class DiffSummary:
     diff_total_lines: int
     diff_file_coverage: list[FileCoverage] = field(default_factory=list)
     coverage_threshold: Optional[float] = None
+    coverage_available: bool = False
 
     @property
     def new_bugs(self) -> int:
@@ -180,14 +184,35 @@ def _filter_duplication_in_diff(
     ]
 
 
+def _coverage_path_in_diff(path: str, new_code_lines: dict[str, set[int]]) -> bool:
+    """Match a coverage path against diff keys, with suffix fallback.
+
+    Handles the common case where coverage.xml uses paths relative to a
+    subdirectory (e.g. "aggregator.py") while GitHub returns repo-root paths
+    (e.g. "src/aggregator.py").
+    """
+    if path in new_code_lines:
+        return True
+    return any(key == path or key.endswith("/" + path) for key in new_code_lines)
+
+
 def _aggregate_diff_coverage(
     coverage: Optional[CoverageResult], new_code_lines: dict[str, set[int]]
 ) -> tuple[Optional[float], Optional[float], int, int, list[FileCoverage]]:
     if not coverage or not coverage.per_file:
+        logger.info("Diff coverage: no per_file data in coverage result")
         return None, None, 0, 0, []
-    matched = [f for f in coverage.per_file if f.path in new_code_lines]
+
+    matched = [f for f in coverage.per_file if _coverage_path_in_diff(f.path, new_code_lines)]
+    logger.info(
+        "Diff coverage: matched %d/%d coverage files (sample coverage paths: %s | sample diff keys: %s)",
+        len(matched), len(coverage.per_file),
+        [f.path for f in coverage.per_file[:3]],
+        list(new_code_lines.keys())[:3],
+    )
     if not matched:
         return None, None, 0, 0, []
+
     total = sum(f.total_lines for f in matched)
     covered = sum(f.covered_lines for f in matched)
     if total == 0:
@@ -222,6 +247,7 @@ def _compute_diff_summary(
         diff_total_lines=total,
         diff_file_coverage=file_coverage,
         coverage_threshold=coverage_threshold,
+        coverage_available=coverage is not None,
     )
 
 
@@ -239,8 +265,8 @@ def _pr_checks(
 ) -> list[GateCheck]:
     checks: list[GateCheck] = []
 
+    threshold = config.coverage.threshold
     if diff_summary.diff_file_coverage:
-        threshold = config.coverage.threshold
         failing = [f for f in diff_summary.diff_file_coverage if f.line_rate < threshold]
         all_pass = len(failing) == 0
         agg = (
@@ -258,6 +284,15 @@ def _pr_checks(
             passed=all_pass,
             blocking=config.coverage.blocking,
             value=value,
+            threshold=f">= {threshold:.0f}% per file",
+        ))
+    elif diff_summary.coverage_available:
+        # coverage.xml was parsed but no changed .py files appeared in it
+        checks.append(GateCheck(
+            name="Coverage (diff)",
+            passed=False,
+            blocking=config.coverage.blocking,
+            value="no coverage data found for changed files (path mismatch?)",
             threshold=f">= {threshold:.0f}% per file",
         ))
 
