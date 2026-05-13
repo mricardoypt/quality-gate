@@ -1,4 +1,4 @@
-"""Writes the full GitHub Job Summary (GITHUB_STEP_SUMMARY) including Claude fix instructions."""
+"""Writes the full GitHub Job Summary (GITHUB_STEP_SUMMARY) and a downloadable artifact report."""
 import logging
 import os
 
@@ -426,11 +426,7 @@ def _claude_instructions(report: AggregatedReport) -> list[str]:
 # Entry point
 # ---------------------------------------------------------------------------
 
-def write(report: AggregatedReport) -> None:
-    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
-    if not summary_path:
-        return
-
+def _build_content(report: AggregatedReport) -> str:
     gate_icon = "✅" if report.gate_passed else "❌"
     lines = [
         f"# {gate_icon} Quality Gate Report",
@@ -451,13 +447,29 @@ def write(report: AggregatedReport) -> None:
         lines += _full_repo_sections(report)
 
     lines += _claude_instructions(report)
+    return "\n".join(lines)
 
+
+def write(report: AggregatedReport) -> None:
+    content = _build_content(report)
+
+    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary_path:
+        try:
+            with open(summary_path, "w") as f:
+                f.write(content)
+        except OSError:
+            logger.warning(
+                "Could not write job summary to %s — mount the runner temp dir in Docker "
+                "(-v $(dirname \"$GITHUB_STEP_SUMMARY\"):$(dirname \"$GITHUB_STEP_SUMMARY\"))",
+                summary_path,
+            )
+
+    repo_path = os.environ.get("REPO_PATH", "/repo")
+    artifact_path = os.path.join(repo_path, "quality-gate-report.md")
     try:
-        with open(summary_path, "w") as f:
-            f.write("\n".join(lines))
+        with open(artifact_path, "w") as f:
+            f.write(content)
+        logger.info("Quality Gate report written to %s", artifact_path)
     except OSError:
-        logger.warning(
-            "Could not write job summary to %s — mount the runner temp dir in Docker "
-            "(-v $(dirname \"$GITHUB_STEP_SUMMARY\"):$(dirname \"$GITHUB_STEP_SUMMARY\"))",
-            summary_path,
-        )
+        logger.warning("Could not write artifact report to %s", artifact_path)

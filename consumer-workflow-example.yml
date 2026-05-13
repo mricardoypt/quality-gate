@@ -30,3 +30,10 @@
             -e PR_NUMBER=${{ github.event.pull_request.number }} \
             -e GITHUB_STEP_SUMMARY \
             ghcr.io/YOUR_ORG/quality-gate:latest
+
+      - name: Upload Quality Gate report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quality-gate-report
+          path: quality-gate-report.md
