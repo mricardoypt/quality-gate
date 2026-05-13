@@ -68,7 +68,7 @@ def main() -> int:
     sarif_result = sarif.parse(bandit_path, pip_audit_path)
 
     mutation_result = None
-    if config.mutation_threshold is not None:
+    if config.mutation_threshold is not None and new_code_lines is None:
         logger.info("Running mutation testing (may take several minutes)…")
         mutation_result = mutation.analyze(REPO_PATH, src_path, tests_path)
 

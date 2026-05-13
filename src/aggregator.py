@@ -240,20 +240,25 @@ def _pr_checks(
     checks: list[GateCheck] = []
 
     if diff_summary.diff_file_coverage:
-        all_pass = all(
-            f.line_rate >= config.coverage.threshold
-            for f in diff_summary.diff_file_coverage
+        threshold = config.coverage.threshold
+        failing = [f for f in diff_summary.diff_file_coverage if f.line_rate < threshold]
+        all_pass = len(failing) == 0
+        agg = (
+            f"{diff_summary.diff_line_rate:.1f}% lines"
+            f" ({diff_summary.diff_covered_lines}/{diff_summary.diff_total_lines})"
+            if diff_summary.diff_line_rate is not None
+            else "N/A"
         )
+        if failing:
+            value = f"{agg} — {len(failing)}/{len(diff_summary.diff_file_coverage)} file(s) below {threshold:.0f}%"
+        else:
+            value = f"{agg} — {len(diff_summary.diff_file_coverage)} file(s) ✅"
         checks.append(GateCheck(
             name="Coverage (diff)",
             passed=all_pass,
             blocking=config.coverage.blocking,
-            value=(
-                f"{diff_summary.diff_line_rate:.1f}% lines"
-                f" ({diff_summary.diff_covered_lines}/{diff_summary.diff_total_lines},"
-                f" {len(diff_summary.diff_file_coverage)} file(s))"
-            ),
-            threshold=f">= {config.coverage.threshold:.0f}% per file",
+            value=value,
+            threshold=f">= {threshold:.0f}% per file",
         ))
 
     checks.append(GateCheck(

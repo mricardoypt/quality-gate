@@ -1,7 +1,10 @@
 """Parses coverage.xml produced by pytest-cov."""
+import os
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from typing import Optional
+
+from src.diff import to_relative
 
 
 @dataclass
@@ -39,7 +42,7 @@ def _parse_file_coverage(root: ET.Element) -> list[FileCoverage]:
         total = len(lines)
         covered = sum(1 for ln in lines if int(ln.get("hits", 0)) > 0)
         files.append(FileCoverage(
-            path=filename,
+            path=os.path.normpath(to_relative(filename)),
             line_rate=float(cls.get("line-rate", 0)) * 100,
             branch_rate=float(cls.get("branch-rate", 0)) * 100,
             covered_lines=covered,
