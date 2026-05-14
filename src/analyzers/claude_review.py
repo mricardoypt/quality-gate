@@ -92,6 +92,47 @@ JSON SCHEMA:
   ]
 }
 
+SEVERITY DEFINITIONS — apply these strictly, do not escalate:
+
+CRITICAL — reserved exclusively for code that WILL or is VERY LIKELY to cause one of the following
+in a production Spark job:
+  • Out-of-memory failure on the driver or executor
+    (e.g. collect(), toPandas(), for row in df.collect(), iterrows() on a large DataFrame)
+  • Full DAG re-execution triggered in a production pipeline
+    (e.g. show(), display(), count() called outside of test or debug files)
+  • Application crash or broken Databricks session
+    (e.g. SparkSession.builder.getOrCreate() called inside a function)
+  • Unbounded data explosion that will make the job fail or run forever
+    (e.g. crossJoin() without a restricting join condition)
+  • Severe, proven performance degradation that makes the job impractical at scale
+    (e.g. Python UDF — F.udf() — applied to a large DataFrame column)
+  • Filter placed AFTER a join on production DataFrames, causing avoidable full shuffles
+
+WARNING — for issues that are incorrect or risky but do not immediately crash or OOM:
+  • print() / logging.error() without exc_info=True in production code
+  • SELECT * / .select("*") in production pipelines (schema drift risk, memory waste)
+  • Caching a DataFrame that is used only once (wasted memory)
+  • Missing unpersist() after cache/persist
+  • Defensive attribute checks: hasattr() or getattr() with defaults (hides bugs)
+  • Functions that clearly do more than one thing (side effects + return value)
+  • Ambiguous or misleading variable/function names in non-trivial contexts
+
+STYLE — for clean-code conventions and team preferences:
+  • Naming conventions (snake_case, descriptive names)
+  • Parameter count (> 3 params is a style concern, never critical or warning alone)
+  • Module-level mutable variables that are local config or constants in practice
+  • Missing type hints
+  • Import ordering or grouping
+
+NEVER flag as CRITICAL:
+  • Anything in test files (tests/**, *_test.py, test_*.py, conftest.py) — skip entirely
+  • collect() or toPandas() in test files — expected and correct
+  • Module-level mutable dicts or lists used as local config or caches
+  • Functions with more than 3 parameters — this is STYLE at most
+  • print() statements — WARNING at most, STYLE in most cases
+  • Missing docstrings or comments
+  • Convention preferences with no runtime impact
+
 VERDICT RULES:
 - FAIL: any critical logical group present
 - NEEDS_CHANGES: no critical, but warning groups present
@@ -106,7 +147,7 @@ LINE NUMBER RULES (critical for correctness):
 - Each added or context line in the diff is annotated with [L:N] where N is its exact line number in the new file
 - ALL line/start_line values must come from [L:N] tags — never compute or guess
 - Lines prefixed with "-" carry no [L:N] tag; they do not exist in the new file — never reference them
-- Do NOT flag issues in test helper or fixture files
+- Files matching tests/**, *_test.py, test_*.py, conftest.py must be completely skipped — produce no groups for them
 
 LOGICAL GROUP RULES:
 - Each individual OCCURRENCE of a problem = its own logical group.
@@ -139,16 +180,17 @@ FUNCTIONS:
 - Never create empty stub methods (pass-only body with no actionable TODO comment).
 
 LOGGING:
-- CRITICAL: Never print() in production code. Use: logger = logging.getLogger(__name__).
-- Never display() or show() in production code.
-- Always include exc_info=True when logging errors.
+- WARNING: Prefer logger.xxx() over print() in production code. Use: logger = logging.getLogger(__name__).
+- CRITICAL: Never display() or show() in production code (triggers full DAG re-execution).
+- WARNING: Always include exc_info=True when logging errors.
 
 ERROR HANDLING:
-- Never hasattr() or getattr() with defaults for defensive attribute checks.
+- WARNING: Never hasattr() or getattr() with defaults for defensive attribute checks.
 - Object validity must be guaranteed at __init__ time.
 
 STATE:
-- CRITICAL: Never use the global keyword or module-level mutable variables.
+- WARNING: Never use the global keyword.
+- STYLE: Module-level mutable variables used as local config or caches are acceptable.
 
 OOP:
 - Prefer classes over free-floating functions for stateful operations.
@@ -158,32 +200,32 @@ IMPORTS / SPARK SESSION:
 - CRITICAL: Never call SparkSession.builder.getOrCreate() inside a function.
   The spark session is always available in Databricks as `spark`.
 
-COLUMN SELECTION (CRITICAL):
-- Never SELECT * or .select("*") in production code.
+COLUMN SELECTION:
+- WARNING: Avoid SELECT * or .select("*") in production code (schema drift, memory waste).
 - Select only required columns before joins, aggregations, and window functions.
 
-FILTER PLACEMENT (CRITICAL):
+FILTER PLACEMENT:
+- CRITICAL: Never filter AFTER a join on production DataFrames — avoidable full shuffles.
 - Filter immediately after reading a table, BEFORE any joins or transforms.
-- Filtering AFTER a join shuffles unnecessary data — flag every occurrence.
-- No transformations inside filter conditions (no cast/rlike/trim in filters).
+- WARNING: No transformations inside filter conditions (no cast/rlike/trim in filters).
 
 CACHING (Classic Compute):
 - Use cache() or persist() when a DataFrame is reused in multiple downstream operations.
 - WARNING: Do NOT cache DataFrames that are used only once — wasted memory.
 - Prefer MEMORY_AND_DISK storage level for large DataFrames.
-- Always unpersist() when caching is no longer needed.
+- WARNING: Always unpersist() when caching is no longer needed.
 
-DRIVER-OVERLOADING OPERATIONS (CRITICAL):
-- Never collect() or toPandas() in production — causes OOM.
-- Never Python for loops over collected DataFrame rows.
-- Never count()/show()/display() in production code (triggers full re-execution).
+DRIVER-OVERLOADING OPERATIONS:
+- CRITICAL: Never collect() or toPandas() in production — causes OOM.
+- CRITICAL: Never Python for loops over collected DataFrame rows.
+- CRITICAL: Never count()/show()/display() in production code (triggers full re-execution).
 
-UDFs (CRITICAL):
-- Never F.udf(). Use built-in PySpark functions.
+UDFs:
+- CRITICAL: Never F.udf() at scale. Use built-in PySpark functions.
 - Performance hierarchy: Built-in > Spark SQL > Pandas UDF > Python UDF.
 
-CROSS JOINS (CRITICAL):
-- Never crossJoin(). Refactor using F.lit(), F.explode(), or proper join conditions.
+CROSS JOINS:
+- CRITICAL: Never crossJoin(). Refactor using F.lit(), F.explode(), or proper join conditions.
 
 BROADCAST JOINS:
 - Use F.broadcast() explicitly for lookup/dimension tables (< 500MB).
