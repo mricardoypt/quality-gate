@@ -56,6 +56,25 @@ def post_pr_comment(body: str) -> None:
         logger.error("Failed to post PR comment: %s %s", response.status_code, response.text)
 
 
+def get_pr_diff_text() -> Optional[str]:
+    """Returns the raw unified diff for the PR, or None when not in PR context."""
+    repository = os.environ.get("GITHUB_REPOSITORY")
+    pr_number = os.environ.get("PR_NUMBER")
+    if not repository or not pr_number:
+        return None
+
+    response = requests.get(
+        f"{_GITHUB_API}/repos/{repository}/pulls/{pr_number}",
+        headers={**_headers(), "Accept": "application/vnd.github.diff"},
+        timeout=30,
+    )
+    if not response.ok:
+        logger.error("Failed to fetch PR diff text: %s %s", response.status_code, response.text)
+        return None
+
+    return response.text
+
+
 def get_changed_lines_by_file() -> Optional[dict[str, set[int]]]:
     """
     Returns {filepath: {added_line_numbers}} for every .py file in the PR.

@@ -426,6 +426,20 @@ def _claude_instructions(report: AggregatedReport) -> list[str]:
 # Entry point
 # ---------------------------------------------------------------------------
 
+def _claude_review_section(report: AggregatedReport) -> list[str]:
+    if not report.claude_review:
+        return []
+    verdict_icons = {"PASS": "✅", "NEEDS_CHANGES": "⚠️", "FAIL": "❌"}
+    icon = verdict_icons.get(report.claude_review.verdict, "❌")
+    return [
+        "",
+        "---",
+        f"## {icon} Claude PR Review",
+        "",
+        report.claude_review.summary_body,
+    ]
+
+
 def _build_content(report: AggregatedReport) -> str:
     gate_icon = "✅" if report.gate_passed else "❌"
     lines = [
@@ -447,6 +461,7 @@ def _build_content(report: AggregatedReport) -> str:
         lines += _full_repo_sections(report)
 
     lines += _claude_instructions(report)
+    lines += _claude_review_section(report)
     return "\n".join(lines)
 
 

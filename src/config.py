@@ -46,6 +46,9 @@ class QualityGateConfig:
     mutation_threshold: Optional[float] = None
     mutation_blocking: bool = False
 
+    # Claude PR review (opt-in — requires ANTHROPIC_API_KEY)
+    claude_review_enabled: bool = False
+
 
 def load_config(path: str) -> QualityGateConfig:
     try:
@@ -97,5 +100,8 @@ def load_config(path: str) -> QualityGateConfig:
         ms = raw["mutation_score"]
         config.mutation_threshold = float(ms.get("threshold", 70))
         config.mutation_blocking = bool(ms.get("blocking", False))
+
+    if "claude_review" in raw:
+        config.claude_review_enabled = bool(raw["claude_review"].get("enabled", False))
 
     return config

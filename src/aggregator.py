@@ -5,6 +5,7 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+from src.analyzers.claude_review import ClaudeReviewResult
 from src.analyzers.complexity import ComplexFunction, ComplexityResult
 from src.analyzers.coverage import CoverageResult, FileCoverage
 from src.analyzers.cycles import CyclesResult
@@ -91,6 +92,7 @@ class AggregatedReport:
     ratings: Optional[Ratings]
     new_code_lines: Optional[dict[str, set[int]]] = field(default=None)
     diff_summary: Optional[DiffSummary] = field(default=None)
+    claude_review: Optional[ClaudeReviewResult] = field(default=None)
 
     @property
     def gate_passed(self) -> bool:
@@ -495,6 +497,7 @@ def aggregate(
     sarif: Optional[SarifResult],
     mutation: Optional[MutationResult],
     new_code_lines: Optional[dict[str, set[int]]] = None,
+    claude_review: Optional[ClaudeReviewResult] = None,
 ) -> AggregatedReport:
     debt = calculate_debt(static, complexity, duplication, raw_metrics)
     ratings: Optional[Ratings] = compute_ratings(static, debt) if static is not None else None
@@ -526,4 +529,5 @@ def aggregate(
         ratings=ratings,
         new_code_lines=new_code_lines,
         diff_summary=diff_summary,
+        claude_review=claude_review,
     )

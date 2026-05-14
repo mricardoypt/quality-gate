@@ -18,3 +18,8 @@ sarif:
 # mutation_score:
 #   threshold: 70
 #   blocking: false
+
+# Uncomment to enable Claude PR code review (PR context only)
+# Requires env vars: ANTHROPIC_API_KEY (mandatory), ANTHROPIC_BASE_URL, ANTHROPIC_MODEL (optional)
+# claude_review:
+#   enabled: true

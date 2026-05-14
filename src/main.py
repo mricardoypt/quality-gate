@@ -5,7 +5,7 @@ import subprocess
 import sys
 
 from src import aggregator
-from src.analyzers import complexity, coverage, cycles, mutation, sarif
+from src.analyzers import claude_review, complexity, coverage, cycles, mutation, sarif
 from src.analyzers import duplication, raw_metrics, static_analysis
 from src.config import load_config
 from src import github_client
@@ -72,6 +72,13 @@ def main() -> int:
         logger.info("Running mutation testing (may take several minutes)…")
         mutation_result = mutation.analyze(REPO_PATH, src_path, tests_path)
 
+    claude_review_result = None
+    if config.claude_review_enabled and new_code_lines is not None:
+        logger.info("Running Claude PR review…")
+        pr_diff_text = github_client.get_pr_diff_text()
+        if pr_diff_text:
+            claude_review_result = claude_review.analyze(pr_diff_text)
+
     report = aggregator.aggregate(
         config=config,
         coverage=coverage_result,
@@ -83,6 +90,7 @@ def main() -> int:
         sarif=sarif_result,
         mutation=mutation_result,
         new_code_lines=new_code_lines,
+        claude_review=claude_review_result,
     )
 
     run_id = os.environ.get("GITHUB_RUN_ID", "")
