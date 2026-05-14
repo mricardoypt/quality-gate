@@ -200,10 +200,11 @@ GENERAL SPARK:
 
 @dataclass
 class ClaudeReviewResult:
-    verdict: str       # "PASS" | "NEEDS_CHANGES" | "FAIL"
-    summary_body: str  # pre-built markdown for the job summary
+    verdict: str             # "PASS" | "NEEDS_CHANGES" | "FAIL"
+    summary_body: str        # pre-built markdown for the job summary
     groups_count: int
     groups_capped: bool
+    critical_violations: int
 
 
 def _annotate_diff_line_numbers(diff: str) -> str:
@@ -432,10 +433,13 @@ def analyze(diff_text: str) -> Optional[ClaudeReviewResult]:
 
     data["logical_groups"], data["groups_capped"] = _cap_groups(data.get("logical_groups", []))
     groups_count = len(data["logical_groups"])
+    critical_violations = sum(
+        1 for g in data["logical_groups"] if g.get("severity") == "critical"
+    )
     capped_note = f" (capped at {MAX_GROUPS})" if data["groups_capped"] else ""
     logger.info(
-        "Claude review — verdict: %s, %d logical group(s)%s",
-        data.get("verdict"), groups_count, capped_note,
+        "Claude review — verdict: %s, %d logical group(s)%s, %d critical",
+        data.get("verdict"), groups_count, capped_note, critical_violations,
     )
 
     return ClaudeReviewResult(
@@ -443,4 +447,5 @@ def analyze(diff_text: str) -> Optional[ClaudeReviewResult]:
         summary_body=_build_markdown(data),
         groups_count=groups_count,
         groups_capped=data["groups_capped"],
+        critical_violations=critical_violations,
     )

@@ -508,6 +508,14 @@ def aggregate(
             coverage_threshold=config.coverage.threshold,
         )
         checks = _pr_checks(diff_summary, config, complexity, sarif, raw_metrics, duplication)
+        if claude_review is not None:
+            checks.append(GateCheck(
+                name="Claude Review: Critical Violations",
+                passed=claude_review.critical_violations == 0,
+                blocking=True,
+                value=f"{claude_review.critical_violations} critical violation(s)",
+                threshold="0",
+            ))
     else:
         diff_summary = None
         checks = _full_repo_checks(
